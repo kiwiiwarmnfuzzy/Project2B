@@ -1,6 +1,6 @@
 from __future__ import print_function
 from pyspark.sql.types import ArrayType, StringType, IntegerType, BooleanType
-from pyspark.sql.functions import udf
+from pyspark.sql.functions import udf, from_unixtime, monotonically_increasing_id
 from pyspark import SparkConf, SparkContext, SparkFiles
 from pyspark.sql import SQLContext
 from pyspark.ml.feature import CountVectorizer
@@ -113,23 +113,34 @@ def main(context):
     comments = comments.withColumn("ngrams", sanitize_udf(comments.body))
     comments = cv_model.transform(comments)
     print("done with transforming the sampled comments")
+
     #make predictions
-    posResult = posModel.transform(comments).select("probability")
-    negResult = negModel.transform(comments).select("probability")
-    #label
     poslabel_udf = udf(lambda prob: 1 if prob[1] >  .2  else 0, IntegerType())
     neglabel_udf = udf(lambda prob: 1 if prob[1] >  .25 else 0, IntegerType())
-    posResult = posResult.withColumn("poslabel", poslabel_udf(posResult.probability))
-    negResult = negResult.withColumn("neglabel", neglabel_udf(negResult.probability))
+    comments = posModel.transform(comments).drop("link_id", "clean_id", "ngrams", "rawPrediction", "prediction")
+    comments = comments.withColumn("poslabel", poslabel_udf(comments.probability)).drop("probability")
+    comments = negModel.transform(comments).drop("features", "rawPrediction", "prediction")
+    comments = comments.withColumn("neglabel", neglabel_udf(comments.probability)).drop("probability")
 
-
-
+    #10
+    #1. compute the percentage of positive, negative comments 
+    print("Percentage of positive comments")
+    comments.select('poslabel').groupBy().avg().show()
+    print("Percenetage of negative comments")
+    comments.select('neglabel').groupBy().avg().show()
+    #2. count the percentage of positive, negative comments
+    comments = comments.withColumn("date", from_unixtime(comments.created_utc, "YYYY-MM-dd"))
+    comments.groupBy("date").agg({"poslabel" : "mean"}).show(50)
+    comments.groupBy("date").agg({"neglabel" : "mean"}).show(50)
+    #3. compute the precentage of postive, negative comments across all states
+#    comments.select("author_flair_text").distinct().show()
+    
 
 if __name__ == "__main__":
     conf = SparkConf().setAppName("CS143 Project 2B")
     conf = conf.setMaster("local[*]")
     sc   = SparkContext(conf=conf)
+    sc.setLogLevel('WARN')
     sqlContext = SQLContext(sc)
     sc.addPyFile("cleantext.py")
-    print("calling main")
     main(sqlContext)
