@@ -1,6 +1,6 @@
 from __future__ import print_function
 from pyspark.sql.types import ArrayType, StringType, IntegerType, BooleanType
-from pyspark.sql.functions import udf, from_unixtime, monotonically_increasing_id
+from pyspark.sql.functions import udf, from_unixtime, lower
 from pyspark import SparkConf, SparkContext, SparkFiles
 from pyspark.sql import SQLContext
 from pyspark.ml.feature import CountVectorizer
@@ -8,6 +8,9 @@ from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder, CrossValidatorModel
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from re import match
+
+# use hashtable to speed up look up
+states = {'nebraska', 'kentucky', 'north dakota', 'michigan', 'hawaii', 'iowa', 'arkansas', 'rhode island', 'utah', 'delaware', 'wisconsin', 'oregon', 'west virginia', 'north carolina', 'massachusetts', 'new mexico', 'ohio', 'district of columbia', 'california', 'florida', 'arizona', 'missouri', 'maine', 'virginia', 'connecticut', 'washington', 'south carolina', 'georgia', 'vermont', 'louisiana', 'illinois', 'new hampshire', 'mississippi', 'south dakota', 'wyoming', 'idaho', 'kansas', 'alaska', 'new york', 'pennsylvania', 'alabama', 'tennessee', 'minnesota', 'new jersey', 'texas', 'indiana', 'montana', 'colorado', 'nevada', 'maryland', 'oklahoma'}
 
 def main(context):
     """Main function takes a Spark SQL context."""
@@ -117,6 +120,7 @@ def main(context):
     #make predictions
     poslabel_udf = udf(lambda prob: 1 if prob[1] >  .2  else 0, IntegerType())
     neglabel_udf = udf(lambda prob: 1 if prob[1] >  .25 else 0, IntegerType())
+    # want to keep poslabel and neglabel in the same dataframe
     comments = posModel.transform(comments).drop("link_id", "clean_id", "ngrams", "rawPrediction", "prediction")
     comments = comments.withColumn("poslabel", poslabel_udf(comments.probability)).drop("probability")
     comments = negModel.transform(comments).drop("features", "rawPrediction", "prediction")
@@ -133,8 +137,10 @@ def main(context):
     comments.groupBy("date").agg({"poslabel" : "mean"}).show(50)
     comments.groupBy("date").agg({"neglabel" : "mean"}).show(50)
     #3. compute the precentage of postive, negative comments across all states
-#    comments.select("author_flair_text").distinct().show()
-    
+    val_state_udf = udf(lambda state: state if state in states else None, StringType())
+    comments = comments.withColumn("state", val_state_udf(lower(comments.author_flair_text)))
+    comments.groupBy("state").agg({"poslabel" : "mean"}).show(10)
+    comments.groupBy("state").agg({"neglabel" : "mean"}).show(10)
 
 if __name__ == "__main__":
     conf = SparkConf().setAppName("CS143 Project 2B")
