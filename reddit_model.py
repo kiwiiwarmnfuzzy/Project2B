@@ -12,6 +12,8 @@ from re import match
 # use hashtable to speed up look up
 states = {'nebraska', 'kentucky', 'north dakota', 'michigan', 'hawaii', 'iowa', 'arkansas', 'rhode island', 'utah', 'delaware', 'wisconsin', 'oregon', 'west virginia', 'north carolina', 'massachusetts', 'new mexico', 'ohio', 'district of columbia', 'california', 'florida', 'arizona', 'missouri', 'maine', 'virginia', 'connecticut', 'washington', 'south carolina', 'georgia', 'vermont', 'louisiana', 'illinois', 'new hampshire', 'mississippi', 'south dakota', 'wyoming', 'idaho', 'kansas', 'alaska', 'new york', 'pennsylvania', 'alabama', 'tennessee', 'minnesota', 'new jersey', 'texas', 'indiana', 'montana', 'colorado', 'nevada', 'maryland', 'oklahoma'}
 
+sampleRate = 0.01
+
 def main(context):
     """Main function takes a Spark SQL context."""
 
@@ -20,8 +22,10 @@ def main(context):
     submissions = sqlContext.read.parquet("submissions.parquet")
     
     # only look at columns that are useful
-    comments = comments.select("id","created_utc","body","author_flair_text", "link_id")
-    submissions = submissions.select("id", "title", "score")
+    comments = comments.select("id","created_utc","body","author_flair_text", "link_id", "score").\
+        withColumnRenamed("score", "commentscore")
+    submissions = submissions.select("id", "title", "score").\
+        withColumnRenamed("score", "storyscore")
 
     #comments.write.parquet("comments-minimal.parquet")
     #submissions.write.parquet("submissions.parquet")
@@ -112,7 +116,7 @@ def main(context):
     comments = comments.filter(~comments.body.rlike(r'^&gt')).\
         filter(~comments.body.rlike(r'\\s'))
     #sample
-    comments = comments.sample(False, .1, None) # 1 serves as the seed so model is reproducible
+    comments = comments.sample(False, sampleRate, None) # 1 serves as the seed so model is reproducible
     #redo 4,5,6a 
     comments = comments.withColumn("ngrams", sanitize_udf(comments.body))
     comments = cv_model.transform(comments)
@@ -130,30 +134,39 @@ def main(context):
     print("Percentage of positive comments")
     result = comments.select('poslabel').groupBy().avg()
     result.repartition(1).write.format("com.databricks.spark.csv").\
-        option("header","true").save("pos-perc.csv")
+        option("header","true").save("res/pos-perc.csv")
     print("Percenetage of negative comments")
     result = comments.select('neglabel').groupBy().avg()
     result.repartition(1).write.format("com.databricks.spark.csv").\
-        option("header","true").save("neg-perc.csv")
-    #2. count the percentage of positive, negative comments by date
+        option("header","true").save("res/neg-perc.csv")
+
+    #2. by date
     comments = comments.withColumn("date", from_unixtime(comments.created_utc, "YYYY-MM-dd"))
     result = comments.groupBy("date").agg({"poslabel" : "mean"})
     result.repartition(1).write.format("com.databricks.spark.csv").\
-        option("header","true").save("pos-by-date.csv")
+        option("header","true").save("res/pos-by-date.csv")
     result = comments.groupBy("date").agg({"neglabel" : "mean"})
     result.repartition(1).write.format("com.databricks.spark.csv").\
-        option("header","true").save("neg-by-date.csv")
-    #3. compute the precentage of postive, negative comments across all states
+        option("header","true").save("res/neg-by-date.csv")
+
+    #3. by state
     val_state_udf = udf(lambda state: state if state in states else None, StringType())
     comments = comments.withColumn("state", val_state_udf(lower(comments.author_flair_text)))
     result = comments.groupBy("state").agg({"poslabel" : "mean"})
     result.repartition(1).write.format("com.databricks.spark.csv").\
-        option("header","true").save("pos-by-state.csv")
+        option("header","true").save("res/pos-by-state.csv")
     result = comments.groupBy("state").agg({"neglabel" : "mean"})
     result.repartition(1).write.format("com.databricks.spark.csv").\
-        option("header","true").save("neg-by-state.csv")
+        option("header","true").save("res/neg-by-state.csv")
+ 
     #4. compute the precentage of positive and negative by story score
-    comments.select('score').show(truncate = False)
+    result = comments.groupBy("commentscore").agg({"poslabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("res/pos-by-commentscore.csv")
+    result = comments.groupBy("storyscore").agg({"neglabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("res/neg-by-storescore.csv")
+    
 
 
 if __name__ == "__main__":
