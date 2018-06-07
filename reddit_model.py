@@ -159,10 +159,17 @@ def main(context):
     result.repartition(1).write.format("com.databricks.spark.csv").\
         option("header","true").save("res/neg-by-state.csv")
  
-    #4. compute the precentage of positive and negative by story score
+    #4a. by comment score
     result = comments.groupBy("commentscore").agg({"poslabel" : "mean"})
     result.repartition(1).write.format("com.databricks.spark.csv").\
         option("header","true").save("res/pos-by-commentscore.csv")
+    result = comments.groupBy("commentscore").agg({"neglabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("res/neg-by-commentscore.csv")
+    #4b. by story score
+    result = comments.groupBy("storyscore").agg({"poslabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("res/pos-by-storyscore.csv")
     result = comments.groupBy("storyscore").agg({"neglabel" : "mean"})
     result.repartition(1).write.format("com.databricks.spark.csv").\
         option("header","true").save("res/neg-by-storescore.csv")
