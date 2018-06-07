@@ -1,6 +1,6 @@
 from __future__ import print_function
 from pyspark.sql.types import ArrayType, StringType, IntegerType, BooleanType
-from pyspark.sql.functions import udf, from_unixtime, lower
+from pyspark.sql.functions import udf, from_unixtime, lower, regexp_replace
 from pyspark import SparkConf, SparkContext, SparkFiles
 from pyspark.sql import SQLContext
 from pyspark.ml.feature import CountVectorizer
@@ -57,9 +57,11 @@ def main(context):
     
     #7: train logistic regression model
     #code adopted from project spec
-    # Initialize two logistic regression models.
+#     #Initialize two logistic regression models.
 #     poslr = LogisticRegression(labelCol="poslabel", featuresCol="features", maxIter=10)
 #     neglr = LogisticRegression(labelCol="neglabel", featuresCol="features", maxIter=10)
+#     poslr.setThreshold(0.2)
+#     neglr.setThreshold(0.25)
 #     # This is a binary classifier so we need an evaluator that knows how to deal with binary classifiers.
 #     posEvaluator = BinaryClassificationEvaluator(labelCol="poslabel")
 #     negEvaluator = BinaryClassificationEvaluator(labelCol="neglabel")
@@ -87,60 +89,72 @@ def main(context):
 #     negTrain, negTest = joined.randomSplit([0.5, 0.5])
 
 #     # Train the models
-#     #print("Training positive classifier...")
-#     #posModel = posCrossval.fit(posTrain)
-#     #print("Training negative classifier...")
-#     #negModel = negCrossval.fit(negTrain)
+#     print("Training positive classifier...")
+#     posModel = posCrossval.fit(posTrain)
+#     print("Training negative classifier...")
+#     negModel = negCrossval.fit(negTrain)
 
 #     # save the models
-#     #posModel.save("www/pos.model")
-#     #negModel.save("www/neg.model")
+#     posModel.save("www/pos.model")
+#     negModel.save("www/neg.model")
 
     #load instead
     posModel = CrossValidatorModel.load("www/pos.model")
     negModel = CrossValidatorModel.load("www/neg.model")
-    
-    #8.2 title of submission of the comment
-    subid_udf = udf(lambda text: text[3:] if text[:3] == "t3_" else text, StringType()) #strip "t3_"
-    comments = comments.withColumn("clean_id", subid_udf(comments.link_id))
-    comments = comments.join(submissions, comments.clean_id == submissions.id).drop(submissions.id)
+    print("finished loading model")
 
+    #8.2 title of submission of the comment
+    comments = comments.withColumn("clean_id", regexp_replace("link_id", r'^t3_', ''))
+    comments = comments.join(submissions, comments.clean_id == submissions.id).drop(submissions.id)
+    
     #9 
     #filter out comments with "\s" and starts with "&gt"
-    filter_udf = udf(lambda text: False if (match(r'^&gt', text) or match(r'\\s', text)) else True, BooleanType())
-    comments = comments.filter(filter_udf(comments.body))
-
-    #since CountVectorizer takes too long, sample from it
-    comments = comments.sample(False, 0.01, 1) # 1 serves as the seed so model is reproducible
+    comments = comments.filter(~comments.body.rlike(r'^&gt')).\
+        filter(~comments.body.rlike(r'\\s'))
+    #sample
+    comments = comments.sample(False, .1, None) # 1 serves as the seed so model is reproducible
     #redo 4,5,6a 
     comments = comments.withColumn("ngrams", sanitize_udf(comments.body))
     comments = cv_model.transform(comments)
     print("done with transforming the sampled comments")
 
     #make predictions
-    poslabel_udf = udf(lambda prob: 1 if prob[1] >  .2  else 0, IntegerType())
-    neglabel_udf = udf(lambda prob: 1 if prob[1] >  .25 else 0, IntegerType())
-    # want to keep poslabel and neglabel in the same dataframe
-    comments = posModel.transform(comments).drop("link_id", "clean_id", "ngrams", "rawPrediction", "prediction")
-    comments = comments.withColumn("poslabel", poslabel_udf(comments.probability)).drop("probability")
-    comments = negModel.transform(comments).drop("features", "rawPrediction", "prediction")
-    comments = comments.withColumn("neglabel", neglabel_udf(comments.probability)).drop("probability")
+    comments = posModel.transform(comments).\
+        drop("body", "link_id", "clean_id", "ngrams","rawPrediction", "probability").\
+        withColumnRenamed("prediction", "poslabel")
+    comments = negModel.transform(comments).drop("features", "rawPrediction", "probability").\
+        withColumnRenamed("prediction", "neglabel")
 
     #10
     #1. compute the percentage of positive, negative comments 
     print("Percentage of positive comments")
-    comments.select('poslabel').groupBy().avg().show()
+    result = comments.select('poslabel').groupBy().avg()
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("pos-perc.csv")
     print("Percenetage of negative comments")
-    comments.select('neglabel').groupBy().avg().show()
-    #2. count the percentage of positive, negative comments
+    result = comments.select('neglabel').groupBy().avg()
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("neg-perc.csv")
+    #2. count the percentage of positive, negative comments by date
     comments = comments.withColumn("date", from_unixtime(comments.created_utc, "YYYY-MM-dd"))
-    comments.groupBy("date").agg({"poslabel" : "mean"}).show(50)
-    comments.groupBy("date").agg({"neglabel" : "mean"}).show(50)
+    result = comments.groupBy("date").agg({"poslabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("pos-by-date.csv")
+    result = comments.groupBy("date").agg({"neglabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("neg-by-date.csv")
     #3. compute the precentage of postive, negative comments across all states
     val_state_udf = udf(lambda state: state if state in states else None, StringType())
     comments = comments.withColumn("state", val_state_udf(lower(comments.author_flair_text)))
-    comments.groupBy("state").agg({"poslabel" : "mean"}).show(10)
-    comments.groupBy("state").agg({"neglabel" : "mean"}).show(10)
+    result = comments.groupBy("state").agg({"poslabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("pos-by-state.csv")
+    result = comments.groupBy("state").agg({"neglabel" : "mean"})
+    result.repartition(1).write.format("com.databricks.spark.csv").\
+        option("header","true").save("neg-by-state.csv")
+    #4. compute the precentage of positive and negative by story score
+    comments.select('score').show(truncate = False)
+
 
 if __name__ == "__main__":
     conf = SparkConf().setAppName("CS143 Project 2B")
