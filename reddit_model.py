@@ -122,6 +122,9 @@ def main(context):
     comments = comments.withColumn("clean_id", regexp_replace("link_id", r'^t3_', ''))
     comments = comments.join(submissions, comments.clean_id == submissions.id).drop(submissions.id)
     
+    # TASK 8.3
+    # Please see TASK 10.3 (by state) line 166
+
     # TASK 9 
     #filter out comments with "\s" and starts with "&gt"
     comments = comments.filter(~comments.body.rlike(r'^&gt')).\
