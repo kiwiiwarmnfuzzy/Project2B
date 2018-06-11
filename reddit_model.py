@@ -8,11 +8,17 @@ from pyspark.ml.classification import LogisticRegression
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder, CrossValidatorModel
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from re import match
+from sklearn import metrics
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import pandas as pd
 
 # use hashtable to speed up look up
 states = {'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut', 'delaware', 'district of columbia', 'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa', 'kansas', 'kentucky', 'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi', 'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico', 'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode island', 'south carolina', 'south dakota', 'tennessee', 'texas', 'utah', 'vermont', 'virginia', 'washington', 'west virginia', 'wisconsin', 'wyoming'}
 
-sampleRate = 0.05
+sampleRate = 0.01
 
 def main(context):
     """Main function takes a Spark SQL context."""
@@ -34,9 +40,9 @@ def main(context):
     labeled_data = sqlContext.read.format("csv").options(header='true', inferSchema='true').load('labeled_data.csv')
 
     #here we do the join on comment id
-    #joined = comments.join(labeled_data, comments.id == labeled_data.Input_id)
-    comments.join(labeled_data, comments.id == labeled_data.Input_id).explain()
-    return
+    joined = comments.join(labeled_data, comments.id == labeled_data.Input_id)
+    #comments.join(labeled_data, comments.id == labeled_data.Input_id).explain()
+
     # TASK 4
     #sanitize_new ignores processed string given by sanitize
     from cleantext import sanitize
@@ -68,50 +74,64 @@ def main(context):
     # TASK 7
     #train logistic regression model
     #code adopted from project spec
-#     #Initialize two logistic regression models.
-#     poslr = LogisticRegression(labelCol="poslabel", featuresCol="features", maxIter=10)
-#     neglr = LogisticRegression(labelCol="neglabel", featuresCol="features", maxIter=10)
-#     poslr.setThreshold(0.2)
-#     neglr.setThreshold(0.25)
-#     # This is a binary classifier so we need an evaluator that knows how to deal with binary classifiers.
-#     posEvaluator = BinaryClassificationEvaluator(labelCol="poslabel")
-#     negEvaluator = BinaryClassificationEvaluator(labelCol="neglabel")
-#     # There are a few parameters associated with logistic regression. We do not know what they are a priori.
-#     # We do a grid search to find the best parameters. We can replace [1.0] with a list of values to try.
-#     # We will assume the parameter is 1.0. Grid search takes forever.
-#     posParamGrid = ParamGridBuilder().addGrid(poslr.regParam, [1.0]).build()
-#     negParamGrid = ParamGridBuilder().addGrid(neglr.regParam, [1.0]).build()
-#     # We initialize a 5 fold cross-validation pipeline.
-#     posCrossval = CrossValidator(
-#         estimator=poslr,
-#         evaluator=posEvaluator,
-#         estimatorParamMaps=posParamGrid,
-#         numFolds=5)
-#     negCrossval = CrossValidator(
-#         estimator=neglr,
-#         evaluator=negEvaluator,
-#         estimatorParamMaps=negParamGrid,
-#         numFolds=5)
-#     # Although crossvalidation creates its own train/test sets for
-#     # tuning, we still need a labeled test set, because it is not
-#     # accessible from the crossvalidator (argh!)
-#     # Split the data 50/50
-#     posTrain, posTest = joined.randomSplit([0.5, 0.5])
-#     negTrain, negTest = joined.randomSplit([0.5, 0.5])
+    #Initialize two logistic regression models.
+    poslr = LogisticRegression(labelCol="poslabel", featuresCol="features", maxIter=10)
+    neglr = LogisticRegression(labelCol="neglabel", featuresCol="features", maxIter=10)
+    poslr.setThreshold(0.2)
+    neglr.setThreshold(0.25)
+    # This is a binary classifier so we need an evaluator that knows how to deal with binary classifiers.
+    posEvaluator = BinaryClassificationEvaluator(labelCol="poslabel")
+    negEvaluator = BinaryClassificationEvaluator(labelCol="neglabel")
+    # There are a few parameters associated with logistic regression. We do not know what they are a priori.
+    # We do a grid search to find the best parameters. We can replace [1.0] with a list of values to try.
+    # We will assume the parameter is 1.0. Grid search takes forever.
+    posParamGrid = ParamGridBuilder().addGrid(poslr.regParam, [1.0]).build()
+    negParamGrid = ParamGridBuilder().addGrid(neglr.regParam, [1.0]).build()
+    # We initialize a 5 fold cross-validation pipeline.
+    posCrossval = CrossValidator(
+        estimator=poslr,
+        evaluator=posEvaluator,
+        estimatorParamMaps=posParamGrid,
+        numFolds=5)
+    negCrossval = CrossValidator(
+        estimator=neglr,
+        evaluator=negEvaluator,
+        estimatorParamMaps=negParamGrid,
+        numFolds=5)
+    # Although crossvalidation creates its own train/test sets for
+    # tuning, we still need a labeled test set, because it is not
+    # accessible from the crossvalidator (argh!)
+    # Split the data 50/50
+    posTrain, posTest = joined.randomSplit([0.5, 0.5])
+    negTrain, negTest = joined.randomSplit([0.5, 0.5])
 
-#     # Train the models
-#     print("Training positive classifier...")
-#     posModel = posCrossval.fit(posTrain)
-#     print("Training negative classifier...")
-#     negModel = negCrossval.fit(negTrain)
+    # Train the models
+    posModel = posCrossval.fit(posTrain)
+    negModel = negCrossval.fit(negTrain)
 
+    # TASK: Extra Credit's Curve:
+    # evaluate the model 
+#     posTestRes = posModel.transform(posTest).toPandas()['probability']
+#     posTestRes = np.array([i[1] for i in posTestRes])
+#     negTestRes = negModel.transform(negTest).toPandas()['probability']
+#     negTestRes = np.array([i[1] for i in negTestRes])
+#     print(negTestRes, posTestRes)
+#     print('ok')
+#     pfpr, ptpr, _ = metrics.roc_curve(posTest.select('poslabel').toPandas(), posTestRes)
+#     nfpr, ntpr, _ = metrics.roc_curve(negTest.select('neglabel').toPandas(), negTestRes)
+#     print(pfpr[:5], ptpr[:5], nfpr[:5],ntpr[:5])
+#     plt.plot(pfpr, ptpr, label = 'posModel')
+#     plt.plot(nfpr, ntpr, label = 'negModel')
+#     plt.legend()
+#     plt.savefig('ROC.png')
+#     plt.close()
 #     # save the models
 #     posModel.save("www/pos.model")
 #     negModel.save("www/neg.model")
 
     #load instead
-    posModel = CrossValidatorModel.load("www/pos.model")
-    negModel = CrossValidatorModel.load("www/neg.model")
+#     posModel = CrossValidatorModel.load("www/pos.model")
+#     negModel = CrossValidatorModel.load("www/neg.model")
     #print("finished loading model")
     
     # TASK 8.1
